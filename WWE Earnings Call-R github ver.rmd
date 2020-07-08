@@ -1,0 +1,1093 @@
+---
+title: "World Wrestling Entertainment Inc. (WWE) Earnings Call Analysis"
+subtitle: "Homework 1, Unstructured Text Analytics"
+author: "Katherine Li"
+output:
+  distill::distill_article:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# I. Project Description
+
+***Background Information:*** An earnings call is a teleconference, or webcast, in which a public company discusses the financial results of a reporting period. Participants often include the executives of the public company (i.e., the C-Suite), the Investor Relationship staff of the public company, representatives from related third-party financial institutions(i.e., analysts from an equity or capital company), and the media. <br>
+***Overview:*** This project starts with text analytics, investigating on topics of term frequency and sentiment with regard to the text that appears in the call transcripts. Further, as the stock price would be the major indicator of a public company's performance from a financial period, the aforementioned text analytics results would be incoorporated with the fluctuation of stock prices overtime. <br>
+***Purpose of the Analysis:*** This project aims to provide any applicable insights for the internal team of WWE with the strategically favorable wording usage during earnings calls. Plus, this project could also be of help to those prospective investors to determine if the timing is right to invest in WWE. 
+
+# II. Relevant Packages
+
+The following packages are called in for this analysis. 
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tidytext)
+library(tm)
+library(rmarkdown)
+library(wordcloud2)
+library(lexicon)
+library(textdata)
+library(gganimate)
+library(httr)
+library(textstem)
+library(widyr)
+library(bizdays)
+```
+
+# III. The Data
+
+*Bronze (Step 1):Read all of the parsed transcripts into R. You can do them individually, but that is a horrible idea and I don't recommend it. Instead, use the `list.files()` function and read files from the resultant object.* <br>
+*Perform some initial exploration of the text and perform any initial cleaning. This is entirely up to you to do whatever you consider necessary.* <br>
+
+## A. Import 
+
+Read in the parsed transcripts of WWE earnings calls.
+
+```{r message=FALSE, warning=FALSE}
+wwecalls <- unzip("/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wweCalls.zip", exdir = "/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wweCalls") 
+
+filelist <- list.files(path = "/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wweCalls")
+
+# remove those raw files from the list
+filelistfinal <- filelist[-c(34, 35)]
+filelistfinal
+
+setwd("/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wweCalls")
+all <- lapply(filelistfinal, function(x){
+  read.csv(x, header = TRUE, stringsAsFactors = FALSE)
+})
+
+data <- do.call("rbind", all)
+
+```
+
+## B. Overview and Preliminary Ideas
+
+### Initial Dataset
+
+The initial dataset includes 2239 records, with information of name(full, first, last), associated organization(WWE and third-party companies), title, text of call, gender, race(estimation, and probability of estimation), ticker, date of call, and corresponding quarter. 
+
+```{r}
+
+rmarkdown::paged_table(data)
+
+```
+
+### A Glimpse 
+
+This is to construct a basic idea about the data type, and etc. From this standpoint, this project is likely to focus on analyzing data related to text, date, and title. 
+
+```{r}
+
+glimpse(data)
+
+```
+
+## C. Cleaning and Preprocessing
+
+### Missing Values 
+
+As previously mentioned, it is relieving to see no missing value in date and text. As for title, 359 out of 2239 records are not labeled, which is roughly 16% of total number of record. It is relatively acceptable, thus proceed to the next step without moving the records with missing titles. 
+
+```{r}
+
+sapply(data, function(x) sum(is.na(x)))
+
+```
+
+### Variable "Name"
+
+There are certain entries as "operator" in column "name", which would cause confusion in the analysis stage. After gathering the total appearances of "operator", which is 258, remove associated records as for now. 
+
+```{r}
+
+#data %>%
+  #filter(name == 'operator') %>%
+  #summarise(n = n())
+
+data <- data %>%
+  filter(name != 'operator')
+
+```
+
+### Variable "Title"
+
+First, get a sense of the unique values included in this column - which is pretty messy. 
+
+```{r}
+
+unique(data$title)
+
+```
+
+Second, do the following cleaning for variable title. 
+- Filter out this entry of "- I think it was -- it's Taj, it used to be Taj, but it's -- is the network. They are -- I think it is our second or third highest paid television deal. They run our programming all the time." <br>
+- For the titles with words ceo, director, vp, cfo, svp, elminate the rest of the title such as the detailed department.<br>
+- For the titles with words chief financial operator, chief financial officer, change that to cfo. <br>
+- For the titles with words vice president, change that to vp. <br>
+- For the titles with words chief executive officer, change that to ceo. <br>
+- Since there are no analyst from WWE itself participated in the included earnings calls, for the titles with words analyst, elminate the rest description. <br>
+Get the unique title names after processing: which are director, ceo, cfo, analyst, vp, coo, ir(investor relationship), media, and chairman. <br>
+
+```{r}
+
+data %>%
+  mutate(title = tolower(title)) %>%
+  filter(title == "analyst" & (organization == "WWE" | organization == "World Wrestling EntertainmentInc." | organization == "World Wrestling Entertainment Inc.")) %>%
+  summarise(n = n())
+      
+
+data <- data %>%
+  filter(title != "- I think it was -- it's Taj, it used to be Taj, but it's -- is the network. They are -- I think it is our second or third highest paid television deal. They run our programming all the time.") %>%
+  mutate(title = tolower(title)) %>%
+  mutate(title = ifelse(str_detect(title, "ceo"), "ceo", title),
+         title = ifelse(str_detect(title, "director"), "director", title),
+         title = ifelse(str_detect(title, "vp"), "vp", title),
+         title = ifelse(str_detect(title, "cfo"), "cfo", title),
+         title = ifelse(str_detect(title, "svp"), "svp", title),
+         title = ifelse(str_detect(title, "analyst"), "analyst", title),
+         title = ifelse(title == "chief fiancial operator" | title == "chief financial officer", "cfo", title),
+         title = ifelse(title == "vice president planning and investor relations", 'vp', title),
+         title = ifelse(title == "chief executive officer", "ceo", title))
+
+unique(data$title)
+
+```
+
+# IV. Single Word Term Frequency
+
+## A. Preliminary Visualization for Overall Term Frequency of Call Text
+
+### A Bar Graph
+
+This is to get a basic idea of the most mentioned words in earnings calls, across all involved individuals, no matter what their titles and associated organizations are. 
+
+```{r}
+
+data %>%
+  dplyr::select(text) %>%
+  mutate(text = tolower(text),
+         text = lemmatize_strings(text)) %>%
+  unnest_tokens(word, text) %>%
+  count(word, sort=TRUE) %>%
+  anti_join(stop_words, by = "word") %>%
+  group_by(word) %>%
+  summarize(total = sum(n)) %>%
+  arrange(desc(total)) %>%
+  slice(1:20) %>%
+  ggplot(aes(x = reorder(word, -total), y = total)) +
+  geom_bar(stat = "identity", fill = "darkseagreen", colour = "azure3") +
+  labs(titel = "Top 20 Mentioned Words in Calls", x = "Word", y = "# of Mention") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### A Word Cloud
+
+```{r}
+
+data %>%
+  dplyr::select(text) %>%
+  unnest_tokens(word, text) %>%
+  count(word, sort = TRUE) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(n>70) %>%
+  na.omit() %>%
+  wordcloud2::wordcloud2(color="darkseagreen", shape = "diamond")
+
+```
+
+## B. Term Frequency, by Title
+
+Due to the differences of positions, involved individuals are likely to perform different patterns in terms of word usage habits. Thus, term frequency of words should be more meaningful if analyzed by title. <br>
+
+### A Table
+
+It is interesting to see that the CFOs are likely to use the same words more frequently, compared with people in other positions. There seems to be some overlap in terms of the frequent words used by CFOs and CEOs - which seemingly makes sense because they have similar interests and power. Another interesting finding is that the most frequently used word of analyst is "question", which is a word that *could* be of neutral or negative tone. 
+
+```{r}
+
+textData <- data %>%
+  select(text, title) %>%
+  mutate(text = tolower(text),
+         text = lemmatize_strings(text))
+
+textData2 <- textData %>%
+  unnest_tokens(word, text) %>%
+  count(title, word, sort=TRUE) %>%
+  anti_join(stop_words, by = "word")
+
+textTF <- textData %>%
+  split(., .$title) %>%
+  lapply(., function(x) {
+    textTokens = tm::MC_tokenizer(x$text)
+    total = length(textTokens)
+  })
+
+temp <- unlist(textTF) 
+
+textTF <- data.frame(title = names(temp),
+                     total = temp)
+
+rownames(textTF) <- NULL
+
+textTF <- textData2 %>%
+  left_join(., textTF , by = "title")
+
+textTF$term_frequency <- textTF$n/textTF$total
+
+rmarkdown::paged_table(textTF)
+```
+
+### Visualization
+
+Some interesting findings: chairman, director, media, investor relation staff, and vice president have certain words that are of particularly high usage. So there *might* be certain hidden pattern that we could dig out. 
+
+```{r}
+
+textTF %>%
+  ggplot(aes(x = term_frequency, fill = title)) +
+  geom_histogram(position="identity", alpha=0.5, show.legend = FALSE) +
+  facet_wrap(~title, ncol = 2, scales = "free_y") +
+  xlim(0, 0.015) +
+  labs(title = "Term Count & Frequency by Title", y = "Count", x = "Term Frequency") +
+  theme_bw()
+
+```
+
+## C. Inverse Document Frequency and tf-idf
+
+### A Table of Inverse Document Frequency
+
+We could see that since there is only one document for this project, the idf for the words would be identical. In other words, it might be fairly meaningless to do the idf analysis. **However, one approach could be seperating the dataset by call date - back to 33 "documents". And the idf table generated via this method might be more informative.**
+
+```{r}
+
+textTFtemp <- textTF
+
+textTFtemp$word <- trimws(gsub("\\w*[0-9]+\\w*\\s*"," ",textTFtemp$word)) 
+textTFtemp$word <- gsub('[[:punct:]]', ' ', textTFtemp$word, perl = TRUE)
+
+textIDF <- textTFtemp %>%
+  filter(word != "") %>%
+  group_by(word) %>%
+  count() %>%
+  mutate(idf = log((length(unique(textTF$title))/n))) %>%
+  arrange(desc(idf))
+
+ rmarkdown::paged_table(textIDF)
+
+```
+
+### Top tf-idf, by Title
+
+**Then, take a look at the table of top tf-idf's by title. ** <br>
+
+Values of term frequency, inverse document frequency and tf-idf are posted corresponding for each word.
+
+This table gives insights about by title, the top 10 most "important" words in the calls (those with comparatively higher tf-idf values). For example, For CEO, "television" is the most "important" word based on this measurement. For CFO, "increase" is most important. 
+
+```{r}
+
+textTFIDF <- textTF %>%
+  tidytext::bind_tf_idf(word, title, n) %>%
+  arrange(desc(tf_idf)) %>%
+  select(-term_frequency)
+
+textTFIDFtop <- textTFIDF %>%
+  group_by(title) %>%
+  arrange(desc(tf_idf)) %>%
+  slice(1:10) 
+
+rmarkdown::paged_table(textTFIDFtop)
+
+```
+
+### Visualization
+
+```{r}
+
+textTFIDFtop %>%
+  ggplot(aes(x = reorder(word, tf_idf), y = tf_idf)) +
+  geom_col(aes(fill = title), position="identity", alpha=0.5, show.legend = FALSE) +
+  facet_wrap(~title, ncol = 3, scales = "free_y") +
+  labs(title = "Words with High tf-idf by Title", x = "Words", y = "idf") +
+  coord_flip() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# V. Single Word Sentiment Analysis 
+
+Though sentiment analysis should take in many factors to consider, looking at sentimental implication of single words, preferably those of most frequent usage, should be a good start to delve into this topic. There are several lexicon that are handy for this sentiment, which include the Lounghran and McDonald's Lexicon, NRC Emotion Lexicon, and AFINN Sentiment Lexicon. Since these lexicon are backed with different mindset, they would provide insights from different angles. 
+
+## A. Lounghran and McDonald's Lexicon
+
+Lounghran and McDonald's Lexicon is created for analysis on financial documents. Though call text is not necessarily financial in its nature, but the content is certaily relevant. This lexicon rules words into six baskets: *negative, positive, uncertainty, litigious, constraining, and superfluous*. This lexicon is supported by the categorization of 4510 commonly used words in this field. <br>
+
+**Insights:** Based on this lexicon, the majority of the words that could be paired are ruled as "negative". This result is pretty unusual, since earnings call might be a situation where the public company tries to absord more investors with the presence of meida. However, this result could also be interpreted as this is a circumstance when media raises a lot of concerns and questions. A **limitation** could be that the words included in the lexicon are rather limited, so a large amount of mentioned words in the transcripts are not actually included in this analysis.
+
+```{r, message=FALSE}
+#rmarkdown::paged_table(lexicon_loughran())
+
+textS <- textData2 %>%
+  inner_join(lexicon_loughran()) %>%
+  count(word, sentiment, sort = TRUE)
+
+textS %>%
+  ggplot(aes(x = reorder(sentiment, n, sum), y = n)) +
+  geom_bar(stat = "identity", aes(fill = "darkseagreen"), show.legend = FALSE) +
+  labs(title = "Sentiment of Words from Calls", subtitle = "Based on Loughran and McDonald's Lexicon", x = "Sentiment", y = "Count") +
+  coord_flip() +
+  theme_gray() +
+  scale_fill_manual(values = c("darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen"))
+
+  
+
+```
+
+## B. NRC Lexicon
+
+The NRC Lexicon is based on the preliminary categorization of 14000 words - which is very likely to have higher capacity than that of Lounghran and McDonald's Lexicon. It puts words into ten baskets: *positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust*. <br>
+
+### Overall
+
+**Insights:** Comparing with the previous result, it is interesting to see that according to NRC, the majority of the "mappable" words are positive, and then are related to "trust". And the proportion of positive words over negative word roughly equals 2, which is doubling the size. 
+
+```{r, message = FALSE}
+
+#paged_table(get_sentiments("nrc"))
+
+textS2 <- textData2 %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentiment)) %>%
+  count(sentiment, sort = TRUE)
+
+textS2 %>%
+  ggplot(aes(x = reorder(sentiment, n, sum), y = n)) +
+  geom_bar(stat = "identity", aes(fill = sentiment), show.legend = FALSE) +
+  labs(title = "Sentiment of Words from Calls", subtitle = "Based on nrc Lexicon", x = "Sentiment", y = "Count") +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = c("darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen","darkseagreen"))
+
+```
+
+### Top Words for each Sentiment
+
+**Insights:** It might be interesting to see what words appear most frequently by sentiment. The following graph actually responds to a previously left question: the word "question" is actually mapped as "positive", and it is the most frequently mentioned "positive" word. 
+
+```{r, message=FALSE}
+
+textS21 <- textData2 %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(!is.na(sentiment)) %>%
+  count(word, sentiment, sort = TRUE)
+
+textS21 %>%
+  group_by(sentiment) %>%
+  arrange(desc(n)) %>%
+  slice(1:10) %>%
+  ggplot(aes(x= reorder(word, n), n)) +
+  geom_col(aes(fill = sentiment), position="identity", alpha=0.5, show.legend = FALSE) +
+  facet_wrap(~sentiment, ncol = 2, scales = "free_y") +
+  labs(title = "Top 10 Words by Sentiment", subtitle = "Based on NRC Lexicon", x = "Word", y = "Count") +
+  coord_flip() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_bw()
+
+```
+
+### Positive/Negative Ratio, by Affiliation to WWE
+
+It is by common sense that if the individual is affiliated to WWE, he/she is likely to speak more positively of concerning issues. For those who are not directly affiliated to WWE, they also have differentiated positions. To be specific, the analysts from third-party financial institutions might have different standpoints, compared with those of the media. Thus, in this sector, group the individuals into three groups, wwe-affiliated, media, and third-party financial institutions. 
+
+**Insights:** It is interesting to find out that three groups all spreak more positively, while media has the highest positive/negative rate out of all groups. Thus, it might imply that the positiveness of words might not be related to whether the individual is affiliated with WWE or not. 
+
+```{r}
+
+nrc <- lexicon::hash_sentiment_nrc
+
+textS22 <- textData2 %>%
+  inner_join(nrc, by = c("word" = "x")) %>%
+  mutate(y = ifelse(y == 1, "positive", y),
+         y = ifelse(y == -1, "negative", y)) %>%
+  group_by(y) %>%
+  mutate(word = reorder(word, n))
+
+textS221 <- textS22 %>%
+  mutate(aff = ifelse(title == "analyst", "third_party_finance", title))
+
+textS222 <- textS221 %>%
+  mutate(aff = ifelse((title == "ceo" | title =="director" | title =="cfo"| title =="vp"| title =="coo"| title =="ir"| title =="chairman"), "wwe-affiliated", title)) %>%
+  group_by(aff, y) %>%
+  summarize(total_s_aff = n()) %>%
+  ungroup() %>%
+  group_by(aff) %>%
+  mutate(percent_s_aff = total_s_aff/sum(total_s_aff))
+
+textS222 %>%
+  ggplot(aes(x = aff, y = percent_s_aff, fill = y)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() + 
+  labs(title = "The Proportion of Positive to Negative Words Usage by Affiliation to WWE", subtitle = "Based on NRC Lexicon", x = "Affiliation", y = "Positive/Negative Ratio") +
+  scale_fill_manual(values = c("seashell3", "sandybrown"))
+
+```
+
+### Positive/Negative by Title
+
+Due to the seemingly "unusual" finding from the previous section - that those who are affiliated to WWE, collectively, do not necessarily speak more positive than negative. Thus, for this section, we're going to see the breakdown of positive/negative ratio by title. 
+
+**Insights:** Individuals across all titles are associated with more positive words than the negative ones. Investor relationship staff and media have the relatively lower positive/negative ratios. This pattern of media is understandable; as for the investor relationship staff, it might because they need to talk in more neutral, or objective tone in earnings calls. But it is always important to remember that even though NRC Lexicon is generated from a much bigger dataset, it is still **limited** by some stretch.
+
+```{r}
+
+#rmarkdown::paged_table(lexicon::hash_sentiment_nrc)
+
+#nrc <- lexicon::hash_sentiment_nrc
+
+#textS22 <- textData2 %>%
+#  inner_join(nrc, by = c("word" = "x")) %>%
+#  mutate(y = ifelse(y == 1, "positive", y),
+#         y = ifelse(y == -1, "negative", y)) %>%
+#  group_by(y) %>%
+#  mutate(word = reorder(word, n))
+
+textS22 %>%
+  ggplot(aes(x = reorder(title, n), y = n, fill = y)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap (~y, scales = "free_y") +
+  coord_flip() +
+  labs(title = "Sentiment of Words by Title", x = "Title", y = "Count") + 
+  theme_bw() 
+
+```
+
+
+### One Single Emotion
+
+*Bronze (Step2): Perform sentiment analyses on the texts. Given that these are earnings calls, you will likely want to use Loughran and McDonald's lexicon. This lexicon can be found in the `lexicon` package and in the `textdata` package. You should also explore the various `nrc` lexicons. Exploring the versions offered in `textdata` is a good start. Select any of the emotions from the various `nrc` lexicons (found within `textdata`) and perform sentiment analyses using that particular emotion. A good approach would be to use the words found within `textdata` and find them within `lexicon`.* <br>
+
+First, get the mean of sentiment scores across titles. We could see that, actually surprising that investor relationship staff showcased the lowest mean score, and media has a fairly high average.
+
+```{r, message=FALSE, warning=FALSE}
+#get_sentiments("nrc")
+
+nrcWord <- textdata::lexicon_nrc()
+
+nrcValues <- lexicon::hash_sentiment_nrc
+
+nrcDominance <- textdata::lexicon_nrc_vad()
+
+senti <- sentimentr::sentiment(textData$text, polarity_dt=lexicon::hash_sentiment_loughran_mcdonald)
+
+senti <- senti %>%
+  group_by(element_id) %>%
+  summarize(sentiment=mean(sentiment))
+
+textDatasenti <- cbind(textData, senti$sentiment)
+
+textDatasenti <- textDatasenti %>%
+  filter(title != is.na(title))
+
+title_mean <- textDatasenti %>%
+  select(title, `senti$sentiment`) %>%
+  group_by(title) %>%
+  summarize(`senti$sentiment` = mean(`senti$sentiment`))
+
+title_mean_plot <- ggplot(textDatasenti) +
+  geom_jitter(aes(x = `senti$sentiment`, y = title, color = title, alpha = 0.25), size = 0.7) +
+  geom_point(data = title_mean, aes(x = `senti$sentiment`, y = title, size = 0.7), col = "black") +
+  labs(title = "Means of Sentiment Scores Across Titles", x = "Sentiment Score", y = "Title") +
+  theme(legend.position = "none", panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.border = element_blank(), panel.background = element_blank()) + xlim(c(-1.2,1.2))
+
+print(title_mean_plot)
+
+```
+
+**Choose "trust" as the single emotion that further investigation is performed on.** <br>
+
+From the result, we could see that if we focus on the words associated with emotion "trust", the average sentiment scores by title are pretty close to each other. The difference is not that obvious - might be for the reason that the sentiment scores assigned to "trust"-related words are pretty identical.
+
+```{r}
+
+# filter one date to analyze
+textData3 <- data %>%
+  select(title, date, text) %>%
+  mutate(date = as.Date(date, "%d-%B-%y")) %>%
+  group_by(title, date) %>%
+  summarise(text = paste0(text, collapse = ""),
+            text = str_squish(text))
+textData3 <- unique(textData3)
+
+# choose an emotion
+trust <- nrcWord %>%
+  filter(sentiment == "trust")
+
+titletemp <- unique(textData3$title)
+datetemp <- unique(textData3$date)
+
+sentione <- data.frame(matrix(ncol = 3, nrow = 0))
+for (i in 1:length(titletemp)) {
+  i = as.numeric(i)
+  for (j in 1:length(datetemp)) {
+    j = as.numeric(j)
+sentitemp <- textData3 %>%
+  filter(title == titletemp[i],
+         date == datetemp[j]) %>%
+  unnest_tokens(tbl=., output = word, input = text)
+sentitemp <- sentitemp [,3]
+testing <- sentitemp %>%
+  inner_join(trust) 
+testing <- testing %>%
+  select(word)
+colnames(testing) <- 'x'
+testing1 <- nrcValues %>%
+  inner_join(testing, nrcValues, by = c("x", "x")) %>%
+  summarize(n = nrow(.), sentiSum = sum(y)) %>%
+  mutate(sentiAvg = sentiSum / n,
+         title = titletemp[i],
+         date = datetemp[j])
+sentione <- rbind(sentione, testing1)
+    
+  }
+}
+
+sentione <- sentione %>%
+  filter(n != 0)
+
+sentione2 <- sentione %>%
+  group_by(title) %>%
+  summarize(avg_trust_title = mean(sentiAvg)) %>%
+  arrange(desc(avg_trust_title))
+
+rmarkdown::paged_table(sentione2)
+
+```
+
+## C. AFINN Lexicon
+
+**Insights:** Having a high absolute score based on AFINN means either one of the two things, or both, as follows: a, high term frequency; b, the extremeness of the sentiment that the word reflects. From the result of the highest absoulte scores, nothing comes out really surprising, as terrific, outstanding, nice, and etc. are of high positivity value. One (maybe) trivial thing is that "gross" is marked as negative and has a relatively high absolute value of score.  
+
+```{r}
+
+#get_sentiments("afinn")
+
+textafinn <- textData2 %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  count(word, value, sort = TRUE) %>%
+  mutate(score = n * value)
+
+textafinn2 <- textafinn %>%
+  top_n(37, abs(score)) %>%
+  mutate(word = reorder(word, score))
+
+textafinn2 %>%
+  ggplot(aes(x = word, y = score), fill = score >= 0) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "Top Words with High Absolute Sentiment", subtitle = "Based on AFINN Lexicon",  x = "Word", y = "Score") +
+  theme_grey()
+
+```
+
+# VI. Bigrams
+
+Words should be viewed from a collective sense - because in real world, many words are meaningless if analyzed individually. Thus, it might provide more in-depth insight to see what word set are used most frequently. 
+
+## A. Most Frequently Used Two-word Sets
+
+The word set "live event" is used most frequently, which is quite expected given the industry that WWE is in. The runner-up here is "home video", which is insightful in some senses since this might be a new business line that WWE is looking to develop and expand.  
+
+```{r}
+
+textBigram <- data %>%
+  select(title, text, date) %>%
+  mutate(text = tolower(text)) %>%
+  mutate(text = lemmatize_strings(text)) %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+textBigram2 <- textBigram %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+textBigram3 <- textBigram2 %>%
+  filter(!(word1 %in% stop_words$word)) %>% 
+  filter(!(word2 %in% stop_words$word))
+
+textBigramFinal <- textBigram3 %>%
+  unite(bigram, word1, word2, sep = " ") %>%
+  count(bigram, sort = TRUE)
+
+rmarkdown::paged_table(textBigramFinal)
+
+```
+
+## B. Issues with Negation Words
+
+As sentiment analysis might be misleading when a negation word is presented right before the word that is mapped to a sentiment/emotion lexicon word. Some common negation words include, but are limited to *"no", "not", "doesn't", "isn't", "wasn't', "can't", "hardly", "barely", "wasn't", "can't", "hardly", "barely", "won't", "don't", "shouldn't", "wouldn't", "couldn't", and etc.* Thus, the following analysis aims to see if what words that are previously done in the sentiment analysis might lead to outcome of opposite direction. <br>
+
+**The first table** shows that the words that are most frequently preceded by a negation word. **The second table** utilizes*AFINN Lexicon*. It shows that the words with the highest possibility to project misleading results on sentiment analysis on individual word. For example, when "evil" might be considered of contributing high amount of negativity in the transcripts, it might be actually doing the opposite thing, as "not evil" should be of positivity rather than negativity. 
+
+```{r}
+
+negation <- textBigram2 %>%
+  filter(word1 == "no" | word1 == "not" | word1 == "doesn't" | word1 == "isn't" | word1 == "wasn't" | word1 == "can't" | word1 == "hardly" | word1 == "barely" | word1 == "won't" | word1 == "don't" | word1 == "shouldn't" | word1 == "wouldn't" | word1 == "couldn't") %>%
+  count(word1, word2, sort = TRUE)
+
+rmarkdown::paged_table(negation)
+
+negation2 <- textBigram2 %>%
+  filter(word1 == "no" | word1 == "not" | word1 == "doesn't" | word1 == "isn't" | word1 == "wasn't" | word1 == "can't" | word1 == "hardly" | word1 == "barely" | word1 == "won't" | word1 == "don't" | word1 == "shouldn't" | word1 == "wouldn't" | word1 == "couldn't") %>%
+  inner_join(get_sentiments("afinn"), by = c(word2 = "word")) %>%
+  count(word2, value, sort = TRUE) %>%
+  mutate(score = value * n) %>%
+  arrange(desc(abs(score)))
+
+rmarkdown::paged_table(negation2)
+
+```
+
+# VII. Correlation 
+
+With the threshold of word count being over 170, there are around 270 pairs of words with correlation of 1. This outcome is pretty interesting in a way that the presence of certain word does "guarantee" the presence of another word.
+
+```{r}
+
+textDataCor <- unnest_tokens(data, words, text)
+
+textDataCor <- textDataCor[!(textDataCor$words %in% stop_words$word), ]
+
+textDataCor %>%
+  group_by(words) %>%
+  filter(n() > 170) %>%
+  pairwise_cor(., words, title, sort = TRUE) %>%
+  rmarkdown::paged_table()
+
+```
+
+# VIII. Time Series 
+
+For preparation purpose, get the distinct values of dates corresponding to the date of the included earnings calls.
+
+```{r}
+
+dataFliud <- data %>%
+  mutate(date = as.Date(date, "%d-%B-%y"))
+
+sort(unique(dataFliud$date))
+
+```
+
+## Change of Sentiment Overtime, by Affiliation to WWE
+
+Only two lines are visibly presented in the graph. After examing the dataset that was used to create the plot - *it turns out that the media did not attend every earnings calls recorded in the dataset. In fact, the media was only present in two calls in 2010. Plus, though the analysts had a relatively consistent presence in the dataset, data of their transcripts before 2004 is missing; or, simply the analysts did not attend these calls until late 2003 and early 2004.* Aside from these, the graph shows that if the person is affiliated to WWE, he/she always had a more positive tone than those who are not affiliated. One interesting, yet maybe trivial finding is that the sentiment reflected from the analysts' text sort of echoes or resonates with the sentiment reflected from the text of those who are affiliated to WWE. 
+
+```{r}
+
+textS3 <- dataFliud %>%
+  select(text, title, date) %>% 
+  mutate(text = tolower(text),
+         text = lemmatize_strings(text)) %>%
+  unnest_tokens(word, text) %>%
+  count(date, title, word, sort = TRUE) %>% 
+  anti_join(stop_words, by = "word")
+
+textS31 <- textS3 %>%
+  mutate(aff = ifelse(title == "analyst", "third_party_finance", title))
+
+textS32 <- textS31 %>%
+  mutate(aff = ifelse((title == "ceo" | title =="director" | title =="cfo"| title =="vp"| title =="coo"| title =="ir"| title =="chairman"), "wwe-affiliated", title))
+
+textS3Final <- textS32 %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  dplyr::select(date, word, n, aff, value) %>%
+  mutate(score = n*value) %>%
+  dplyr::select(date, aff, score)
+
+textS3Final %>%
+  group_by(date, aff) %>%
+  summarize(scoreTotal = sum(score)) %>%
+  ungroup() %>%
+  group_by(date) %>%
+  ggplot(aes(x = date, y = scoreTotal, color = aff)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Change of Sentiment Overtime by Affiliation to WWE", subtitle = "Based on AFINN Lexicon", x = "Time", y = "Score") +
+  theme_bw()
+
+```
+
+# IX. WWE Stock Price
+
+*Silver (Step3):Register for a free API key from <a href"https://www.alphavantage.co/documentation/">alphavantage</a>. Using your API key, get the daily time series for the given ticker and explore the 10 trading days around each call's date (i.e., the closing price for 5 days before the call, the closing price for the day of the call, and the closing price for the 5 days after the call). Do any visible patterns emerge when exploring the closing prices and the sentiment scores you created? Explain what this might mean for people wanting to make decisions based upon a call.* <br>
+
+First, get the closing prices for five days before, five days after, and on the day of the earnings call. Incoorperate them into one table as follows.
+
+```{r}
+library(alphavantager) 
+library(gridExtra)
+library(lubridate)
+av_api_key("3G2QKRSIM41NCCRI")
+apidata <- av_get(symbol = "WWE", av_fun = "TIME_SERIES_DAILY", datatype = "csv", outputsize = "full")
+wweClosing <- apidata %>%
+  select(timestamp, close)
+
+callDate <- sort(unique(dataFliud$date))
+
+wwePrice <- data.frame(matrix(ncol= 2,nrow= 0))
+colnames(wwePrice) <- colnames(wweClosing)
+
+for (i in 1:length(callDate)) {
+  i = as.numeric(i)
+  standing  = as.numeric(which(callDate[i] == wweClosing$timestamp))
+  wwePriceTemp <- wweClosing[(standing-5):(standing+5),]
+  colnames(wwePriceTemp)[1] <- "date"
+#  colnames(wwePriceTemp)[2] <- "closing_price"
+  wwePrice = rbind(wwePrice, wwePriceTemp)
+}
+
+rmarkdown::paged_table(wwePrice)
+
+
+```
+
+Second, link sentiment scores with the closing prices of the 11-day period around the earnings call date. 
+
+The sentiment scores of the call do not necessarily reflect the high or low of the stock price of the call date. But it does, however, more or less, hint on the trend of the stock price in a short period of time. Just take the first graph from down below as an example. The sentiment score of the call is fairly high, and sure, the stock price drops on the following day, but the stock price has a quite big increase in the day after. 
+
+```{r, warning=FALSE, message=FALSE}
+
+textDatasenti3 <- cbind(data, senti$sentiment)
+
+date_mean <- textDatasenti3 %>%
+  select(date, `senti$sentiment`) %>%
+  group_by(date) %>%
+  summarize(`senti$sentiment` = mean(`senti$sentiment`))%>%
+  mutate(date = as.Date(date, "%d-%B-%y"))
+
+wwePriceplot <- wwePrice %>%
+  left_join(date_mean) %>%
+  mutate(date = as.Date(date, "%d-%B-%y")) 
+
+wwePriceplot <- wwePriceplot %>%
+  mutate(index = 0)
+
+wwePriceplot[c(1:11), 4] = "1"
+wwePriceplot[c(12:22), 4] = "2"
+wwePriceplot[c(23:33), 4] = "3"
+wwePriceplot[c(34:44), 4] = "4"
+wwePriceplot[c(45:55), 4] = "5"
+wwePriceplot[c(56:66), 4] = "6"
+wwePriceplot[c(67:77), 4] = "7"
+wwePriceplot[c(78:88), 4] = "8"
+wwePriceplot[c(89:99), 4] = "9"
+wwePriceplot[c(100:110), 4] = "10"
+wwePriceplot[c(111:121), 4] = "11"
+wwePriceplot[c(122:132), 4] = "12"
+wwePriceplot[c(133:143), 4] = "13"
+wwePriceplot[c(144:154), 4] = "14"
+wwePriceplot[c(155:165), 4] = "15"
+wwePriceplot[c(166:176), 4] = "16"
+wwePriceplot[c(177:187), 4] = "17"
+wwePriceplot[c(188:198), 4] = "18"
+wwePriceplot[c(199:209), 4] = "19"
+wwePriceplot[c(210:220), 4] = "20"
+wwePriceplot[c(221:231), 4] = "21"
+wwePriceplot[c(232:242), 4] = "22"
+wwePriceplot[c(243:253), 4] = "23"
+wwePriceplot[c(254:264), 4] = "24"
+wwePriceplot[c(265:275), 4] = "25"
+wwePriceplot[c(276:286), 4] = "26"
+wwePriceplot[c(287:297), 4] = "27"
+wwePriceplot[c(298:308), 4] = "28"
+wwePriceplot[c(309:319), 4] = "29"
+wwePriceplot[c(320:330), 4] = "30"
+wwePriceplot[c(331:341), 4] = "31"
+wwePriceplot[c(342:352), 4] = "32"
+wwePriceplot[c(353:363), 4] = "33"
+
+wwePriceplot$index <- as.numeric(wwePriceplot$index)
+
+rmarkdown::paged_table(wwePriceplot)
+
+```
+
+
+```{r, message = FALSE, warning=FALSE}
+
+#index 1-6
+wwePriceplot1 <- wwePriceplot %>%
+  filter(index <= 6)
+
+ggplot(wwePriceplot1) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot1=na.omit(wwePriceplot1), mapping = aes(date, close, color = wwePriceplot1$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+#index 7-12
+wwePriceplot2 <- wwePriceplot %>%
+  filter(index <= 12 & index >= 7)
+
+ggplot(wwePriceplot2) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot2=na.omit(wwePriceplot2), mapping = aes(date, close, color = wwePriceplot2$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+# index 13 - 18
+wwePriceplot3 <- wwePriceplot %>%
+  filter(index <= 18 & index >= 13)
+
+ggplot(wwePriceplot3) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot3=na.omit(wwePriceplot3), mapping = aes(date, close, color = wwePriceplot3$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+# index 19 - 24
+wwePriceplot4 <- wwePriceplot %>%
+  filter(index <= 24 & index >= 19)
+
+ggplot(wwePriceplot4) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot4=na.omit(wwePriceplot4), mapping = aes(date, close, color = wwePriceplot4$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+# index 25 - 30
+wwePriceplot5 <- wwePriceplot %>%
+  filter(index <= 30 & index >= 25)
+
+ggplot(wwePriceplot5) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot5=na.omit(wwePriceplot5), mapping = aes(date, close, color = wwePriceplot5$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+# index 31-33
+wwePriceplot6 <- wwePriceplot %>%
+  filter(index <= 33 & index >= 31)
+
+ggplot(wwePriceplot6) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(wwePriceplot6=na.omit(wwePriceplot6), mapping = aes(date, close, color = wwePriceplot6$`senti$sentiment`)) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 3, scales = "free_x", shrink = FALSE) 
+
+```
+
+**Another Approach: The Overall** <br>
+**Insight:** From this graph, we could see that sentiment scores do not absolutely assoicate with the ups and downs of the stock prices on the days of calls; **but**, it might somehow give out certain information in terms of the future trend of the stock price. Take the fourth point from the left as an example: the stock price on the call date is relatively high in that given period; meanwhile, the sentiment score is pretty low, which implies negativity. The stock price did go down for a period of time after the date of the fourth point though.
+
+```{r}
+
+date_mean <- date_mean %>%
+  left_join(wwePrice)
+
+ggplot(date_mean) +
+  geom_line(aes(x = date, y = close), color = "darkseagreen") +
+  geom_point(aes(x = date, y = close, color =`senti$sentiment` )) +
+  scale_color_gradient(low = "gold4", high = "yellow") +
+  theme_bw() +
+  labs(title = "WWE Stock Price with Sentiment Score", x = "Date", y = "")
+```
+
+# X. Adding in the Raw Files and Revisit Previous Analysis
+
+*Platnium (Step 4): There are two calls within the zip file that you did not use for the previous steps -- they are not already parsed. If you are able to parse them, incorporate them into the rest of your data and determine if any new information comes to light.*
+
+**Parse the 2016-10-27 earnings call transcript. **
+
+```{r}
+
+raw1 <- read.csv("/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wwe_raw_27_Oct_16.csv")
+
+temp1 <-  data_frame(raw1[5:7,])
+names(temp1)[1] <- 'name'
+index <- separate(temp1,name,c('name','title'),sep = '-')
+index['organization'] <- 'World Wrestling Entertainment'
+temp1 <-  data_frame(raw1[9:14,])
+names(temp1)[1] <- 'name'
+index2 <- separate(temp1,name,c('name','organization'),sep = '-')
+index2['title'] <- 'Analyst'
+index <- rbind(index,index2)
+index$name <- str_trim(index$name,side = "both")
+index$title <- str_trim(index$title,side = "both")
+index$organization <- str_trim(index$organization,side = "both")
+index[nrow(index)+1,] <- c('Operator','','')
+index <- index %>% 
+  mutate_at(c('name','organization','title'),as.character) 
+index$name[9] <- 'Robert Routh'
+index['date']=as.Date('2016-10-27')
+index['quarter']='Q3'
+
+transcript1 <-  data_frame(raw1[-c(1:14),]) %>% 
+  mutate(text=as.character(raw1[-c(1:14),])) %>% 
+  select(text)
+transcript1$text <- str_trim(transcript1$text,side = "both")
+
+i = 1
+parse1 = data.frame(name=character(),text=character())
+
+while (i<=nrow(transcript1)) {
+  if(transcript1$text[i] %in% index$name){
+    parse1 <- parse1 %>% 
+      add_row(name = transcript1$text[i],text = transcript1$text[i+1])
+    i=i+2
+  }
+  else{
+    parse1 <- parse1 %>% 
+      add_row(name = parse1$name[nrow(parse1)],text = transcript1$text[i])
+    i=i+1
+    }
+}
+
+parse1 <- parse1 %>% 
+  inner_join(index,by='name') %>% 
+  filter(name != 'Operator') %>% 
+  select('name','title','organization','date','quarter','text')
+
+```
+
+**Parse the 2016-07-28 earnings call transcript. **
+
+```{r}
+
+raw2 <- read.csv("/Users/katliyx/Documents/SPRING2020/ITAO70250-Unstructured/Homework/HW1/wwe_raw_28_Jul_16.csv")
+index2 <- index %>% 
+  select(name,title,organization) %>% 
+  add_row(name='Laura Martin', title='Analyst',organization='Needham Investor Group')%>% 
+  mutate(date = as.Date('2016-07-28')) %>% 
+  mutate(quarter ='Q2') 
+index2$name[8] <- 'Dan Moore'
+index2$name[9] <- 'Rob Routh'
+
+transcript2 <-  data_frame(raw2[c(15:134),]) %>% 
+  mutate(text=as.character(raw2[c(15:134),])) %>% 
+  select(text)
+transcript2$text <- str_trim(transcript2$text,side = "both")
+
+i = 1
+parse2 = data.frame(name=character(),text=character())
+
+while (i<=nrow(transcript2)) {
+  if(transcript2$text[i] %in% index2$name){
+    parse2 <- parse2 %>% 
+      add_row(name = transcript2$text[i],text = transcript2$text[i+1])
+    i=i+2
+  }
+  else{
+    parse2 <- parse2 %>% 
+      add_row(name = parse2$name[nrow(parse2)],text = transcript2$text[i])
+    i=i+1
+    }
+}
+
+parse2 <- parse2 %>% 
+  inner_join(index2,by='name') %>% 
+  filter(name != 'Operator') %>% 
+  select('name','title','organization','date','quarter','text')
+
+parse <- rbind(parse1,parse2)
+
+```
+
+New sentiment score by date. 
+
+```{r}
+
+parseData <- parse %>%
+  select(date, text) %>%
+  mutate(text = tolower(text),
+         text = lemmatize_strings(text)) 
+#  unnest_tokens(word, text) %>%
+ # anti_join(stop_words, by = "word")%>%
+ # group_by(date) %>%
+ # count(date, word, sort=TRUE) 
+
+# get the sentiment score by date 
+senti2 <- sentimentr::sentiment(parseData$text, polarity_dt=lexicon::hash_sentiment_loughran_mcdonald)
+senti2 <- senti2 %>%
+  group_by(element_id) %>%
+  summarize(sentiment = mean(sentiment))
+
+parsesenti <- cbind(parseData, senti2$sentiment)
+
+date_mean2 <- parsesenti %>%
+  select(date, `senti2$sentiment`) %>%
+  group_by(date) %>%
+  summarize(`senti2$sentiment` = mean(`senti2$sentiment`)) %>%
+  mutate(date = as.Date(date, "%d-%B-%y"))
+```
+
+The new stock prices of the 11-day period around the call date. 
+
+```{r}
+#get the stock prices of 5 days before, 5 days after, and the day the call happened on
+
+callDate2 <- sort(unique(parseData$date))
+#callDate2
+
+wwePrice2 <- data.frame(matrix(ncol= 2,nrow= 0))
+colnames(wwePrice2) <- colnames(wweClosing)
+
+for (i in 1:length(callDate2)) {
+  i = as.numeric(i)
+  standing  = as.numeric(which(callDate2[i] == wweClosing$timestamp))
+  wwePriceTemp2 <- wweClosing[(standing-5):(standing+5),]
+  colnames(wwePriceTemp2)[1] <- "date"
+#  colnames(wwePriceTemp)[2] <- "closing_price"
+  wwePrice2 = rbind(wwePrice2, wwePriceTemp2)
+}
+
+rmarkdown::paged_table(wwePrice2)
+```
+
+Link sentiment & stock prices together. And plot. 
+
+**Interpretation**: For the period from 2016-07-21 to 2016-08-04 (call date: 2016-07-28), we could see that the sentiment score on the call date is pretty low. As the stock price has a "major" drop in the following days - this sentiment score might help hint on this change in the stock price. For the period from 2016-10-20 to 2016-11-03 (call date: 2016-10-27), we could see that the sentiment score might not be working well in terms of hinting on the future trend of the stock price. To be specific, the sentiment score of the call date is relatively higher, while the stock price has a relatively bigger drop right on the following three days.
+
+```{r}
+
+wwePriceplotnew <- wwePrice2 %>%
+  left_join(date_mean2) %>%
+  mutate(date = as.Date(date, "%d-%B-%y"))  %>%
+  mutate(index = 0)
+
+wwePriceplotnew[c(1:11),4] = "77"
+wwePriceplotnew[c(12:22),4] = "777"
+
+wwePriceplotnew$index <- as.numeric(wwePriceplotnew$index)
+
+ggplot(wwePriceplotnew) +
+  geom_line(aes(x = date, y = close), color = "peachpuff2") +
+  geom_point(wwePriceplotnew=na.omit(wwePriceplotnew), mapping = aes(date, close, color = wwePriceplotnew$`senti2$sentiment`)) +
+  scale_color_gradient(low = "rosybrown4", high = "plum1") +
+  theme_bw() +
+  facet_wrap(~ index, ncol = 2, scales = "free_x", shrink = FALSE) +
+  labs(title = "Stock Price Fluctuation of WWE with Sentiment Score", subtitle = "77: call date 2016/7/28; 777: call date 2016/10/27", x = "Date", y = "Closing Price of the Day")
+
+```
+
+# XI. Final Thoughts
+**Some other issues to investigate include, but certainly not limited to:** <br>
+(1) How often does a certain executive speak in the calls? How often does the media raise questions in the calls? How often does the analyst, from a third-party, take time to explain on some concerns? <br>
+(2) More in-depth analysis on issues related to negation words, and etc. should be done. Since the executives do not want to scare off the investors - so, as the purpose of using euphemisms might to mislead, how much does these "fake" euphemisms take up of the whole call? And how could this information give investors more appropriate estimation and epectation of the future stock prices?<br>
+(3) From a linguistic standpoint, there should be a better way to classify the linguistic features, especially of the executives'. For example, classification in terms of the agreeableness, conscientiousness, extroversion, neuroticism, openness in the executives' choices of wording and expression might be a good place to start. <br>
+(4) Using pre-established lexicon might be a good way. But do keep in mind that a certain individual's past experience and characteristic might influence his/her way of speaking. Thus, the historic information of the executives might also be something that is worth looking into.<br>
+(5) Many things happening in the calls might be strategic and rehearsed beforehand. Other things that are noteworthy include: the order that the analysts are called upon, and etc. <br>
+(6) Stock prices are affected by many factors; many factors could hint on the future trend of stock price. Thus, depending alone on the sentiment score to predict the trend of the stock price is sort of insufficient. Also, stock price might be affected by many unforeseen events.
